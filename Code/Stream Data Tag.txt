@@ -1,0 +1,95 @@
+<script>
+(function() {
+    // Function to get the value of a specific cookie by name
+    function getCookieValue(name) {
+        var nameEQ = name + "=";
+        var ca = document.cookie.split(';');
+        for(var i = 0; i < ca.length; i++) {
+            var c = ca[i];
+            while (c.charAt(0) == ' ') c = c.substring(1, c.length);
+            if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length, c.length);
+        }
+        return null;
+    }
+
+    // Get the value of the '_vwo_uuid' cookie
+    var vwoUuidCookieValue = getCookieValue('_vwo_uuid');
+
+    var mapEvent = function(event, dataLayer) {
+        switch(event) {
+            case 'GAEvent':
+                if (dataLayer.event_category.includes("Categorie impressies")) {
+                    return "view_item_list";
+                } else if (dataLayer.event_action === "Remove from wishlist") {
+                    return "add_to_wishlist";
+                } else if (dataLayer.event_action === "Compare" && dataLayer.event_category === "productactions") {
+                    return "product_compare";
+                } else if (dataLayer.event_category === "Category banner") {
+                    return "category_banner_click";
+                }
+                break;
+            case 'checkout':
+                if (dataLayer.checkout_step === 1) {
+                    return "view_cart";
+                } else if (dataLayer.checkout_step === 3) {
+                    return "begin_checkout";
+                }
+                break;
+            case 'addToCart':
+                return "add_to_cart";
+            case 'removeFromCart':
+                return "remove_from_cart";
+            case 'productDetails':
+                return "view_item";
+            case 'gtm.js':
+                if (dataLayer.url.includes("/inspiratie/")) {
+                    return "inspiratie_view";
+                } else if (dataLayer.url.includes("/mijnsanitair")) {
+                    return "mijnsanitair_view";
+                } else if (dataLayer.groupCategory2 === "Search") {
+                    return "view_search_results";
+                } else if (dataLayer.url.includes("/advies/")) {
+                    return "advies_view";
+                }
+                break;
+        }
+        return event;
+    };
+
+    var dataLayer = {
+        url: {{url}},
+        checkout_step: {{dl - ecommerce.checkout.actionField.step}},
+        event_category: {{event category}},
+        event_action: {{event action}},
+        groupCategory2: {{groupCategory2}}
+    };
+
+    var data = {
+        ga_stream_cookie: vwoUuidCookieValue, // Using the '_vwo_uuid' cookie value here
+        event: mapEvent({{Event}}, dataLayer),
+        timestamp: Date.now().toString()
+    };
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "URL", true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    var timeoutDuration = 5000; // 5 seconds
+    xhr.timeout = timeoutDuration;
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) { // Done
+            if (xhr.status >= 200 && xhr.status < 300) {
+                console.log("Data successfully sent:", data);
+            } else {
+                console.error("Failed to send data. Status:", xhr.status, "Response:", xhr.responseText);
+            }
+        }
+    };
+    xhr.ontimeout = function() {
+        console.error("Request timed out after " + timeoutDuration + "ms. Failed to send data:", data);
+    };
+    xhr.onerror = function() {
+        console.error("Request error. Failed to send data:", data);
+    };
+    xhr.send(JSON.stringify(data));
+})();
+</script>

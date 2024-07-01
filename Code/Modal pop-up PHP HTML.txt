@@ -1,0 +1,23 @@
+{extends file="components/modal/modal.tpl"}
+{block name="modal-class"}recommendations-popup{/block}
+{block name="modal-size"}modal-small{/block}
+{block name="modal-title"}
+    <h2 class="mb-0">{'RECOMMENDATION_POPUP_TITLE'|translate:'default' nofilter}</h2>
+{/block}
+{block name="modal-content"}
+    <div class="col-12 text-center py-3">
+        <p>
+            {'RECOMMENDATION_POPUP_CONTENT'|translate:'default' nofilter}
+        </p>
+        <a class="btn" href="{3899|generate_url:content}"
+           data-gtm-event="click"
+           data-gtm-category="popup_cta"
+           data-gtm-action="upsell - variant A"
+           data-gtm-label="{Registry::instance()->getCurrentSiteViewEntity()->getHttpRoot()}{3899|generate_url:content}"
+        >
+            <span class="btn-title">
+                {'RECOMMENDATION_POPUP_BUTTON'|translate:'default' nofilter}
+            </span>
+        </a>
+    </div>
+{/block}

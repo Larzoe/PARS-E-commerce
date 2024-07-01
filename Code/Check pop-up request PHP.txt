@@ -1,0 +1,13 @@
+private function assignRecommendation(ServerRequestInterface $request): void
+    {
+        $this->template->assign(['recommendation' => false]);
+        $cookies = $request->getCookieParams();
+        $cookieValue = array_key_exists('_vwo_uuid', $cookies) ? $cookies['_vwo_uuid'] : '';
+        if (!empty($cookieValue)) {
+            $cacheItem = $this->recommendationCache->getItem('recommendation-' . $cookieValue);
+            if ($cacheItem->isHit()) {
+                $this->recommendationCache->deleteItem($cacheItem->getKey());
+                $this->template->assign(['recommendation' => true]);
+            }
+        }
+    }

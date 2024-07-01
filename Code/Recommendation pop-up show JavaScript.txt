@@ -1,0 +1,38 @@
+/* -----EXIT INTENT POPUP. visible at the cartpage and all the checkout steps except completedpage ----- */
+import { Modal } from "../modal/modal";
+
+export const recommendationsPopup = (function () {
+    const recommendationAb = document.querySelector(".recommendation-ab");
+    const popup = document.querySelector(".recommendations-popup");
+
+    const init = function () {
+        // if the popup doesnt exist return;
+        if (!popup) {
+            return;
+        }
+
+        const recommendationsPopup = new Modal({
+            selector: ".recommendations-popup",
+            isClosable: true,
+        });
+        // Interval function
+        const showPopup = () => {
+            const recommendationAb = document.querySelector(".recommendation-ab");
+            if (recommendationAb && popup) {
+                recommendationsPopup.show();
+                clearInterval(popupInterval);
+            }
+        };
+
+        const popupInterval = setInterval(showPopup, 300);
+
+        // Timeout to clear the interval after 5 seconds
+        setTimeout(() => {
+            clearInterval(popupInterval);
+        }, 5000);
+    };
+
+    return {
+        init: init,
+    };
+})();

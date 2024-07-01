@@ -1,0 +1,32 @@
+public function handle(ServerRequestInterface $request): ResponseInterface
+    {
+        $body = (string)$request->getBody();
+
+        if ($request->getMethod() !== RequestMethodInterface::METHOD_POST || empty($body)) {
+            return $this->sendFailedResponse();
+        }
+
+        $jsonBody = json_decode($body, true);
+        if (!array_key_exists('sessionId', $jsonBody)) {
+            return $this->sendFailedResponse();
+        }
+        $cacheKey = 'recommendation-' . $jsonBody['sessionId'];
+        $cacheItem = new CacheItem($cacheKey, '1', true);
+        $this->cacheItemPool->save($cacheItem);
+        if ($this->cacheItemPool->commit()) {
+            return new SerializeResponse(
+                (new ApiResponseData())
+                    ->addValidationMessage('Data saved')
+                    ->setSuccess(true)
+                    ->setData(true),
+                200
+            );
+        }
+        return new SerializeResponse(
+            (new ApiResponseData())
+                ->addValidationMessage('Failed')
+                ->setSuccess(false)
+                ->setData([]),
+            400
+        );
+    }
