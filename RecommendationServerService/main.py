@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -10,21 +10,26 @@ from datetime import datetime, timedelta, timezone
 import pickle
 from cachetools import TTLCache
 import asyncio
-import requests
 import httpx
-from fastapi import HTTPException, status
 import os
+import tracemalloc
+from tensorflow.keras import backend as K
+
+# Start real-time geheugen monitoring
+tracemalloc.start()
 
 # initialize server
 app = FastAPI()
-# initialize chache
+
+# initialize cache (TTL van 1200 seconden en max 2000 sessies)
 aggregated_data = TTLCache(maxsize=2000, ttl=1200)
-# import tokenizer and neural network from directory
+
+# Importeer tokenizer en model
 with open('tokenizer-test.pickle', 'rb') as handle:
     tokenizer = pickle.load(handle)
 model = tf.keras.models.load_model('LSTM-test.keras')
 
-# configure app
+# Configureer CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://www.sanitairwinkel.nl/"],
@@ -33,34 +38,58 @@ app.add_middleware(
     allow_headers=["X-Apikey", "Content-Type"],
 )
 
+# NIEUW: Gecentraliseerde HTTP-client om geheugen te besparen
+CLIENT = httpx.AsyncClient()
+
+@app.on_event("shutdown")
+async def close_http_client():
+    await CLIENT.aclose()
+
+# NIEUW: Houdt achtergrondtaken bij en ruimt ze op na voltooiing
+background_tasks = set()
+
+def milliseconds_to_datetime(ms):
+    return datetime.fromtimestamp(ms / 1000.0, timezone.utc)
+
+def clean_expired_sessions():
+    """Verwijdert verlopen sessies uit de cache om geheugen te besparen."""
+    current_time = datetime.now(timezone.utc)
+    for session in list(aggregated_data.keys()):
+        session_start_time = aggregated_data[session]['timestamps'][0]
+        if (current_time - session_start_time).total_seconds() > 1200:
+            del aggregated_data[session]
 
 async def send_prediction(prediction: dict):
+    """Stuur een asynchrone API-aanvraag zonder geheugen te blokkeren."""
     url = "https://api.rorix.nl/recommendation"
     headers = {
         "X-Apikey": "fPhVEkGpS7o3kQc41nwqdWE7VZYx6ZvY",
         "Content-Type": "application/json"
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=prediction)
+    try:
+        # NIEUW: timeout toegevoegd om hangende requests te voorkomen
+        response = await CLIENT.post(url, headers=headers, json=prediction, timeout=5.0)
         if response.status_code == 200:
             print(response.json())
         elif response.status_code == 401:
-            # Handling unauthenticated error specifically
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed.")
+            print("AUTHENTICATIE FOUT: 401")
         else:
-            # Generic error handling for other HTTP status codes
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            print(f"API-ERROR {response.status_code}: {response.text}")
+    except httpx.ConnectTimeout:
+        print("FOUT: API reageerde niet op tijd.")
+    except Exception as e:
+        print(f"ONVERWACHTE FOUT IN send_prediction(): {str(e)}")
 
-
-def milliseconds_to_datetime(ms):
-    return datetime.fromtimestamp(ms / 1000.0, timezone.utc)
-
-
-# function to process events
+# Functie om events te verwerken en voorspellingen te doen
 async def process_event(event):
+    """Verwerkt een event en voorspelt of een gebruiker een pop-up moet krijgen."""
+    
+    # NIEUW: Opschonen van verlopen sessies
+    clean_expired_sessions()
+    
     session_id = event['ga_stream_cookie']
     event_timestamp = milliseconds_to_datetime(int(event['timestamp']))
-
+    
     if session_id not in aggregated_data:
         aggregated_data[session_id] = {
             'events': [event['event']],
@@ -78,37 +107,35 @@ async def process_event(event):
         aggregated_data[session_id]['time_since_session_start'].append(event_timestamp - session_start_time)
         aggregated_data[session_id]['time_between_events'].append(event_timestamp - last_event_time)
         aggregated_data[session_id]['number_of_events'] += 1
-    
+
     if aggregated_data[session_id]['number_of_events'] >= 4 and aggregated_data[session_id]['prediction'] == 0:
-        # Tokenize the event_list to numbers = integer tokenization
+        # Tokenize de events naar gehele getallen
         tokenized_events = [tokenizer.texts_to_sequences([x])[0][0] for x in aggregated_data[session_id]['events']]
         tsst_list = [int(t.total_seconds()) for t in aggregated_data[session_id]['time_since_session_start']]
         tbe_list = [int(t.total_seconds()) for t in aggregated_data[session_id]['time_between_events']]
 
-        # Pre-Pad the tokenized text with 0's
-        tokenized_events = list(list(pad_sequences([tokenized_events], maxlen=50, value=-1))[0])
-        tsst_list = list(list(pad_sequences([tsst_list], maxlen=50, value=-1))[0])
-        tbe_list = list(list(pad_sequences([tbe_list], maxlen=50, value=-1))[0])
+        # Pre-pad de lijsten tot lengte 50 met -1 als fill-value
+        tokenized_events = list(pad_sequences([tokenized_events], maxlen=50, value=-1)[0])
+        tsst_list = list(pad_sequences([tsst_list], maxlen=50, value=-1)[0])
+        tbe_list = list(pad_sequences([tbe_list], maxlen=50, value=-1)[0])
 
         data_instance = np.array(tokenized_events + tbe_list + tsst_list).reshape(1, 50, 3)
-        
-        # get prediction
+
         prediction = (model.predict(data_instance) > 0.5).astype(int)
+        # NIEUW: Maak geheugen vrij na elke voorspelling
+        K.clear_session()
+
         if prediction == 1:
             aggregated_data[session_id]['prediction'] = 1
-            
-            # send prediction to API
             print('sending prediction')
-            send_prediction({"sessionId":session_id})
+            # NIEUW: Gebruik background task om niet te blokkeren
+            asyncio.create_task(send_prediction({"sessionId": session_id}))
 
-
-
-# Define a Pydantic model for the expected data structure (if known)
+# Pydantic model voor de verwachte event data
 class EventData(BaseModel):
     ga_stream_cookie: str
     event: str
     timestamp: str
-    
 
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -142,13 +169,23 @@ def read_root():
     </html>
     """
 
-
 @app.post("/events")
 async def receive_event(data: EventData):
-    # Data is automatically parsed and validated against the EventData model
+    # Parse en valideer de binnenkomende data
     data = data.model_dump()
-    asyncio.create_task(process_event(data))
-    
+    task = asyncio.create_task(process_event(data))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+
+@app.get("/monitor_memory")
+def monitor_memory():
+    """Geeft een overzicht van de grootste geheugenverbruikers."""
+    snapshot = tracemalloc.take_snapshot()
+    top_stats = snapshot.statistics("lineno")
+    response = []
+    for stat in top_stats[:5]:
+        response.append(f"{stat.size / 1024:.1f} KB - {stat.count} objecten - {stat.traceback.format()}")
+    return {"top_memory_usage": response}
 
 if __name__ == "__main__":
     uvicorn.run(app, port=8000)
